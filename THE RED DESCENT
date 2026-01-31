@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>THE RED DESCENT - STATIC</title>
+    <style>
+        body { margin: 0; background: #000; color: #f00; font-family: 'Courier New', monospace; overflow: hidden; }
+        canvas { width: 100vw; height: 100vh; image-rendering: pixelated; }
+        #overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; 
+                   flex-direction: column; justify-content: center; align-items: center; 
+                   background: #000; z-index: 10; text-align: center; }
+        #hud { position: absolute; bottom: 20px; left: 20px; font-size: 18px; z-index: 5; text-shadow: 2px 2px #000; }
+        #minimap { position: absolute; bottom: 20px; right: 20px; width: 160px; height: 160px; 
+                   background: rgba(30, 0, 0, 0.7); border: 2px solid #500; z-index: 5; }
+        #static { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4; opacity: 0; mix-blend-mode: screen; }
+    </style>
+</head>
+<body>
+
+<canvas id="static"></canvas>
+<canvas id="view"></canvas>
+<canvas id="minimap"></canvas>
+
+<div id="hud">STAMINA: <span id="stamina">100</span>%</div>
+
+<div id="overlay">
+    <div id="story-text">THE DOOR IS OPEN.<br><br>THEY ARE INSIDE.</div>
+    <button id="btn" style="background:none; border:1px solid #f00; color:#f00; padding:10px 20px; margin-top:20px; cursor:pointer;">RUN</button>
+</div>
+
+<script>
+let audioCtx;
+function playHeartbeat(vol) {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(45, audioCtx.currentTime);
+    gain.gain.setValueAtTime(vol * 0.4, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+}
+
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+const mapCanvas = document.getElementById('minimap');
+const mCtx = mapCanvas.getContext('2d');
+const staticCanvas = document.getElementById('static');
+const sCtx = staticCanvas.getContext('2d');
+
+const screenW = 640, screenH = 400;
+canvas.width = screenW; canvas.height = screenH;
+mapCanvas.width = 160; mapCanvas.height = 160;
+staticCanvas.width = 200; staticCanvas.height = 200;
+
+let gameState = "INTRO";
+let player = { x: 1.5, y: 1.5, dir: 0, planeX: 0, planeY: 0.66 };
+let stamina = 100, lastHB = 0;
+
+const worldMap = [
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
+    [1,0,1,0,1,0,1,1,1,1,0,1,0,1,1,1,1,1,0,1],
+    [1,0,1,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,1],
+    [1,0,1,1,1,1,1,1,0,1,1,1,1,1,0,1,1,1,0,1],
+    [1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,1],
+    [1,1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,0,1,1,1],
+    [1,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,1,1,0,1,1,1,1,1,0,1,1,1,1,1,1,1,0,1],
+    [1,0,0,1,0,0,0,0,0,1,0,1,0,0,0,0,0,1,0,1],
+    [1,1,0,1,1,1,1,1,0,1,0,1,0,1,1,1,0,1,0,1],
+    [1,0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,0,1,0,1],
+    [1,0,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,0,1],
+    [1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,1],
+    [1,0,1,0,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1],
+    [1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1,1,0,1],
+    [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,1,0,1],
+    [1,0,1,1,1,1,1,0,1,1,1,1,1,1,1,1,0,0,2,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+const enemy = { x: 18, y: 17, dist: 30 }; 
+
+document.getElementById('btn').onclick = () => {
+    gameState = "MAZE";
+    document.getElementById('overlay').style.display = 'none';
+};
+
+const keys = {};
+window.onkeydown = (e) => keys[e.code] = true;
+window.onkeyup = (e) => keys[e.code] = false;
+
+document.addEventListener('mousemove', (e) => {
+    if (document.pointerLockElement) player.dir += e.movementX * 0.003; 
+});
+
+function drawStatic() {
+    const imageData = sCtx.createImageData(200, 200);
+    for (let i = 0; i < imageData.data.length; i += 4) {
+        const c = Math.random() * 255;
+        imageData.data[i] = imageData.data[i+1] = imageData.data[i+2] = c;
+        imageData.data[i+3] = 255;
+    }
+    sCtx.putImageData(imageData, 0, 0);
+}
+
+function update() {
+    if(gameState !== "MAZE") return;
+
+    // Look with Arrows
+    if(keys['ArrowLeft']) player.dir -= 0.05;
+    if(keys['ArrowRight']) player.dir += 0.05;
+    player.planeX = Math.cos(player.dir + Math.PI/2) * 0.66;
+    player.planeY = Math.sin(player.dir + Math.PI/2) * 0.66;
+
+    let moveSpeed = keys['ShiftLeft'] ? 0.09 : 0.05;
+    if (keys['ShiftLeft'] && stamina > 0) stamina -= 0.7; 
+    else stamina = Math.min(100, stamina + 0.4);
+    document.getElementById('stamina').innerText = Math.floor(stamina);
+
+    const cosDir = Math.cos(player.dir), sinDir = Math.sin(player.dir);
+    let nX = player.x, nY = player.y;
+
+    if(keys['KeyW']) { nX += cosDir * moveSpeed; nY += sinDir * moveSpeed; }
+    if(keys['KeyS']) { nX -= cosDir * moveSpeed; nY -= sinDir * moveSpeed; }
+    if(keys['KeyA']) { nX += sinDir * moveSpeed; nY -= cosDir * moveSpeed; }
+    if(keys['KeyD']) { nX -= sinDir * moveSpeed; nY += cosDir * moveSpeed; }
+
+    if(worldMap[Math.floor(nY)][Math.floor(nX)] === 0) { player.x = nX; player.y = nY; }
+    else if (worldMap[Math.floor(nY)][Math.floor(nX)] === 2) { alert("EXITED."); location.reload(); }
+
+    // ENEMY AI - Collision Aware
+    let dx = player.x - enemy.x, dy = player.y - enemy.y;
+    enemy.dist = Math.sqrt(dx*dx + dy*dy);
+    let enVX = (dx/enemy.dist) * 0.02, enVY = (dy/enemy.dist) * 0.02;
+    
+    // Only move if not hitting a wall (simple collision check)
+    if(worldMap[Math.floor(enemy.y)][Math.floor(enemy.x + enVX)] === 0) enemy.x += enVX;
+    if(worldMap[Math.floor(enemy.y + enVY)][Math.floor(enemy.x)] === 0) enemy.y += enVY;
+    
+    if(enemy.dist < 0.6) { alert("IT CAUGHT YOU."); location.reload(); }
+
+    let hbInt = Math.max(100, enemy.dist * 100);
+    if (Date.now() - lastHB > hbInt) {
+        let vol = Math.max(0, 1.5 - (enemy.dist / 12));
+        if (vol > 0.1) { playHeartbeat(vol); drawStatic(); }
+        lastHB = Date.now();
+    }
+    document.getElementById('static').style.opacity = Math.max(0, 0.6 - (enemy.dist / 5));
+}
+
+function draw() {
+    ctx.fillStyle = '#010000'; ctx.fillRect(0, 0, screenW, screenH/2);
+    ctx.fillStyle = '#100000'; ctx.fillRect(0, screenH/2, screenW, screenH/2);
+
+    if(gameState === "MAZE") {
+        const dX = Math.cos(player.dir), dY = Math.sin(player.dir);
+        let zB = new Array(screenW);
+
+        for(let x = 0; x < screenW; x++) {
+            let camX = 2 * x / screenW - 1;
+            let rX = dX + player.planeX * camX, rY = dY + player.planeY * camX;
+            let mX = Math.floor(player.x), mY = Math.floor(player.y);
+            let dDX = Math.abs(1/rX), dDY = Math.abs(1/rY), sX, sY, sdX, sdY;
+
+            if(rX < 0) { sX = -1; sdX = (player.x - mX) * dDX; }
+            else { sX = 1; sdX = (mX + 1 - player.x) * dDX; }
+            if(rY < 0) { sY = -1; sdY = (player.y - mY) * dDY; }
+            else { sY = 1; sdY = (mY + 1 - player.y) * dDY; }
+
+            let hit = 0, side;
+            while(hit === 0) {
+                if(sdX < sdY) { sdX += dDX; mX += sX; side = 0; }
+                else { sdY += dDY; mY += sY; side = 1; }
+                if(worldMap[mY][mX] > 0) hit = 1;
+            }
+            let pD = (side === 0) ? (sdX - dDX) : (sdY - dDY);
+            zB[x] = pD;
+            let h = Math.floor(screenH / pD);
+            ctx.strokeStyle = worldMap[mY][mX] === 2 ? '#fff' : (side === 1 ? '#300' : '#600');
+            ctx.beginPath(); ctx.moveTo(x, -h/2 + screenH/2); ctx.lineTo(x, h/2 + screenH/2); ctx.stroke();
+        }
+
+        let sX = enemy.x - player.x, sY = enemy.y - player.y;
+        let invD = 1.0 / (player.planeX * dY - dX * player.planeY);
+        let tX = invD * (dY * sX - dX * sY), tY = invD * (-player.planeY * sX + player.planeX * sY);
+        let spX = Math.floor((screenW / 2) * (1 + tX / tY));
+        if(tY > 0) {
+            let sH = Math.abs(Math.floor(screenH / tY));
+            ctx.fillStyle = "#000"; 
+            for(let x = Math.floor(-sH/4+spX); x < Math.floor(sH/4+spX); x++) {
+                if(x > 0 && x < screenW && tY < zB[x]) ctx.fillRect(x, -sH/2 + screenH/2, 1, sH);
+            }
+        }
+
+        // Minimap
+        mCtx.clearRect(0,0,160,160);
+        let sz = 160/20;
+        mCtx.fillStyle="#200";
+        for(let y=0;y<20;y++) for(let x=0;x<20;x++) if(worldMap[y][x]==1) mCtx.fillRect(x*sz,y*sz,sz-1,sz-1);
+        mCtx.fillStyle="#0f0"; mCtx.fillRect(player.x*sz-2,player.y*sz-2,4,4);
+        mCtx.fillStyle="#f00"; mCtx.fillRect(enemy.x*sz-2,enemy.y*sz-2,4,4);
+    }
+    requestAnimationFrame(() => { update(); draw(); });
+}
+draw();
+</script>
+</body>
+</html>
